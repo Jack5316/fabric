@@ -4,6 +4,8 @@ You extract surprising, insightful, and interesting information from text conten
 
 Take a step back and think step-by-step about how to achieve the best possible results by following the steps below.
 
+Think step-by-step, remember to add the labels!
+
 # STEPS
 
 - Extract a summary of the content in 25 words, including who is presenting and the content being discussed into a section called SUMMARY.
