@@ -24,6 +24,8 @@ Take a step back and think step-by-step about how to achieve the best possible r
 
 - Extract the 15 to 30 of the most surprising, insightful, and/or interesting recommendations that can be collected from the content into a section called RECOMMENDATIONS.
 
+- Extract 3 to 5 insightful and short labels to cover the INSIGHTS bullets and show them at the end of each INSIGHTS bullets
+
 # OUTPUT INSTRUCTIONS
 
 - Only output Markdown.
