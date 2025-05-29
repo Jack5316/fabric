@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/danielmiessler/fabric/plugins"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/danielmiessler/fabric/common"
-	"github.com/samber/lo"
-	"github.com/sashabaranov/go-openai"
+	"github.com/danielmiessler/fabric/plugins"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -19,6 +18,16 @@ func NewClient() (ret *Client) {
 }
 
 func NewClientCompatible(vendorName string, defaultBaseUrl string, configureCustom func() error) (ret *Client) {
+	ret = NewClientCompatibleNoSetupQuestions(vendorName, configureCustom)
+
+	ret.ApiKey = ret.AddSetupQuestion("API Key", true)
+	ret.ApiBaseURL = ret.AddSetupQuestion("API Base URL", false)
+	ret.ApiBaseURL.Value = defaultBaseUrl
+
+	return
+}
+
+func NewClientCompatibleNoSetupQuestions(vendorName string, configureCustom func() error) (ret *Client) {
 	ret = &Client{}
 
 	if configureCustom == nil {
@@ -31,10 +40,6 @@ func NewClientCompatible(vendorName string, defaultBaseUrl string, configureCust
 		ConfigureCustom: configureCustom,
 	}
 
-	ret.ApiKey = ret.AddSetupQuestion("API Key", true)
-	ret.ApiBaseURL = ret.AddSetupQuestion("API Base URL", false)
-	ret.ApiBaseURL.Value = defaultBaseUrl
-
 	return
 }
 
@@ -42,20 +47,20 @@ type Client struct {
 	*plugins.PluginBase
 	ApiKey     *plugins.SetupQuestion
 	ApiBaseURL *plugins.SetupQuestion
-	ApiClient  *openai.Client
+	ApiClient  *goopenai.Client
 }
 
 func (o *Client) configure() (ret error) {
-	config := openai.DefaultConfig(o.ApiKey.Value)
+	config := goopenai.DefaultConfig(o.ApiKey.Value)
 	if o.ApiBaseURL.Value != "" {
 		config.BaseURL = o.ApiBaseURL.Value
 	}
-	o.ApiClient = openai.NewClientWithConfig(config)
+	o.ApiClient = goopenai.NewClientWithConfig(config)
 	return
 }
 
 func (o *Client) ListModels() (ret []string, err error) {
-	var models openai.ModelsList
+	var models goopenai.ModelsList
 	if models, err = o.ApiClient.ListModels(context.Background()); err != nil {
 		return
 	}
@@ -73,7 +78,7 @@ func (o *Client) SendStream(
 	req := o.buildChatCompletionRequest(msgs, opts)
 	req.Stream = true
 
-	var stream *openai.ChatCompletionStream
+	var stream *goopenai.ChatCompletionStream
 	if stream, err = o.ApiClient.CreateChatCompletionStream(context.Background(), req); err != nil {
 		fmt.Printf("ChatCompletionStream error: %v\n", err)
 		return
@@ -82,7 +87,7 @@ func (o *Client) SendStream(
 	defer stream.Close()
 
 	for {
-		var response openai.ChatCompletionStreamResponse
+		var response goopenai.ChatCompletionStreamResponse
 		if response, err = stream.Recv(); err == nil {
 			if len(response.Choices) > 0 {
 				channel <- response.Choices[0].Delta.Content
@@ -118,17 +123,49 @@ func (o *Client) Send(ctx context.Context, msgs []*goopenai.ChatCompletionMessag
 	return
 }
 
+func (o *Client) NeedsRawMode(modelName string) bool {
+	openaiModelsPrefixes := []string{
+		"o1",
+		"o3",
+		"o4",
+	}
+	for _, prefix := range openaiModelsPrefixes {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (o *Client) buildChatCompletionRequest(
-	msgs []*goopenai.ChatCompletionMessage, opts *common.ChatOptions,
+	inputMsgs []*goopenai.ChatCompletionMessage, opts *common.ChatOptions,
 ) (ret goopenai.ChatCompletionRequest) {
-	messages := lo.Map(msgs, func(message *goopenai.ChatCompletionMessage, _ int) goopenai.ChatCompletionMessage {
-		return *message
-	})
+
+	// Create a new slice for messages to be sent, converting from []*Msg to []Msg.
+	// This also serves as a mutable copy for provider-specific modifications.
+	messagesForRequest := make([]goopenai.ChatCompletionMessage, len(inputMsgs))
+	for i, msgPtr := range inputMsgs {
+		messagesForRequest[i] = *msgPtr // Dereference and copy
+	}
+
+	// Provider-specific modification for DeepSeek:
+	// DeepSeek requires the last message to be a user message.
+	// If fabric constructs a single system message (common when a pattern includes user input),
+	// we change its role to user for DeepSeek.
+	if strings.Contains(opts.Model, "deepseek") { // Heuristic to identify DeepSeek models
+		if len(messagesForRequest) == 1 && messagesForRequest[0].Role == goopenai.ChatMessageRoleSystem {
+			messagesForRequest[0].Role = goopenai.ChatMessageRoleUser
+		}
+		// Note: This handles the most common case arising from pattern usage.
+		// More complex scenarios where a multi-message sequence ends in 'system'
+		// are not currently expected from chatter.go's BuildSession logic for OpenAI providers
+		// but might require further rules if they arise.
+	}
 
 	if opts.Raw {
 		ret = goopenai.ChatCompletionRequest{
 			Model:    opts.Model,
-			Messages: messages,
+			Messages: messagesForRequest,
 		}
 	} else {
 		if opts.Seed == 0 {
@@ -138,7 +175,7 @@ func (o *Client) buildChatCompletionRequest(
 				TopP:             float32(opts.TopP),
 				PresencePenalty:  float32(opts.PresencePenalty),
 				FrequencyPenalty: float32(opts.FrequencyPenalty),
-				Messages:         messages,
+				Messages:         messagesForRequest,
 			}
 		} else {
 			ret = goopenai.ChatCompletionRequest{
@@ -147,7 +184,7 @@ func (o *Client) buildChatCompletionRequest(
 				TopP:             float32(opts.TopP),
 				PresencePenalty:  float32(opts.PresencePenalty),
 				FrequencyPenalty: float32(opts.FrequencyPenalty),
-				Messages:         messages,
+				Messages:         messagesForRequest,
 				Seed:             &opts.Seed,
 			}
 		}

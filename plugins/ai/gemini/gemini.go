@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/danielmiessler/fabric/plugins"
 	goopenai "github.com/sashabaranov/go-openai"
-	"strings"
 
 	"github.com/danielmiessler/fabric/common"
 	"github.com/google/generative-ai-go/genai"
@@ -140,6 +141,10 @@ func (o *Client) extractText(response *genai.GenerateContentResponse) (ret strin
 		}
 	}
 	return
+}
+
+func (o *Client) NeedsRawMode(modelName string) bool {
+	return false
 }
 
 func toMessages(msgs []*goopenai.ChatCompletionMessage) (systemInstruction *genai.Content, messages []genai.Part) {
